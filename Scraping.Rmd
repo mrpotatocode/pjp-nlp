@@ -1,0 +1,127 @@
+---
+title: "Scraping the Pandemic Journaling Project"
+author: "Thomas Rosenthal"
+date: "April 02, 2021"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(tibble)
+library(data.table)
+library(rvest)
+library(stringr)
+library(here)
+```
+
+```{r rundate}
+#get rundate for file names
+rundate = toString(sapply(date(now()), gsub, pattern = "-", replacement = "", fixed = TRUE))
+```
+
+```{r concept}
+#concept
+
+#get data from top page
+raw_data <- read_html("https://www.pandemicjournalingproject.org/en/archive/featured?entry_type=text_only&page=1&search=")
+
+#get ids from html_nodes
+ids <- raw_data %>% 
+  html_nodes("div div div div ") %>%
+  html_attr("id")
+
+#tibble, remove NAs
+ids <- tibble(ids) %>% filter(!is.na(ids))
+
+#get entries from html_nodes
+entries <- raw_data %>%
+  html_nodes("div [class = 'row']") %>% 
+  html_text()
+
+#tibble
+entries <- tibble(entries)
+
+#join ids and entries
+fin <- left_join(rownames_to_column(ids), rownames_to_column(entries), by = ("rowname" = "rowname"))
+
+head(fin)
+```
+
+
+```{r loop}
+
+#currently there are 45 pages, this generates a tibble of those URLs with "&page=1..." through "&page=45"
+URLs <- data.frame()
+for(i in 1:45){
+  x <- paste0("https://www.pandemicjournalingproject.org/en/archive/featured?entry_type=text_only&page=",i,"&search=")
+  x <- tibble(x)
+  URLs <- rbind(x,URLs)
+}
+
+#create as URLs instead
+URLs <- URLs$x
+
+#remove any URLs that resolve to 404/similar
+checkURLs <- lapply(URLs, function(u) {
+  tryCatch({
+    html_obj <- read_html(u)
+    draft_table <- html_nodes(html_obj,'table')
+    cik <- substr(u,start = 41,stop = 47)
+    draft1 <- html_table(draft_table,fill = TRUE)
+    final <- u
+  }, error = function(x) NULL)
+})
+
+#remove the 404s -- there are none, but if we set the for loop to 50 we'd remove those pages until they came to exist
+URLs <- unlist(checkURLs)
+
+#create our ouput dataframe
+entries_all <- data.frame()
+
+#run for loop from concept chunk
+for(i in URLs){
+  raw_data <- read_html(i)
+  
+  entries <- raw_data %>%
+    html_nodes("div [class = 'row']") %>% 
+    html_text()
+
+  entries <- tibble(entries)
+  
+  ids <- raw_data %>% 
+    html_nodes("div div div div ") %>%
+    html_attr("id")
+
+  ids <- tibble(ids) %>% filter(!is.na(ids))
+  
+  entries_joined <- left_join(rownames_to_column(ids), rownames_to_column(entries), by = ("rowname" = "rowname"))
+
+  #bind to output dataframe
+  entries_all <- rbind(entries_joined,entries_all)
+  
+  #slow the scraper down, five seconds between each page
+  Sys.sleep(5)
+}
+```
+
+```{r output}
+head(entries_all)
+```
+
+```{r csv}
+#write to csv, rest is done in python
+path_out = paste0(getwd(),'/data/')
+
+file_name = paste0(path_out, 'PandemicJournalingProject_',rundate,'.csv')
+
+write_csv(entries_all,file_name)
+```
+
+
